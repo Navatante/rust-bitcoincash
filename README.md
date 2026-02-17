@@ -1,7 +1,7 @@
 <div align="center">
   <h1>Rust Bitcoin Cash</h1>
 
-  <img alt="Rust Bitcoin logo by Navatante, see license and source files under /logo" src="./logo/rust-bitcoin.png" width="300" />
+  <img alt="Rust Bitcoin logo by Navatante, see license and source files under /logo" src="./logo/rust-bitcoincash.png" width="300" />
 
   <p>Library with support for de/serialization, parsing and executing on data-structures
     and network messages related to Bitcoin Cash.
