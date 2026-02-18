@@ -17,9 +17,9 @@ use arbitrary::Arbitrary;
 use bitcoin_primitives::block::{Checked, Unchecked};
 use bitcoin_primitives::script::{self, ScriptHash, WScriptHash};
 use bitcoin_primitives::{
-    absolute, block, merkle_tree, pow, relative, transaction, witness, OutPoint, RedeemScript,
+    absolute, block, merkle_tree, pow, relative, transaction, OutPoint, RedeemScript,
     RedeemScriptBuf, ScriptPubKey, ScriptPubKeyBuf, ScriptSig, ScriptSigBuf, Sequence, TapScript,
-    TapScriptBuf, Transaction, TxIn, TxOut, Txid, Witness, WitnessScript, WitnessScriptBuf, Wtxid,
+    TapScriptBuf, Transaction, TxIn, TxOut, Txid, WitnessScript, WitnessScriptBuf, Wtxid,
 };
 use hashes::sha256t;
 
@@ -40,9 +40,7 @@ struct Structs<'a> {
     c: block::Header,
     d: block::Version,
     e: block::BlockHash,
-    f: block::WitnessCommitment,
     g: merkle_tree::TxMerkleNode,
-    h: merkle_tree::WitnessMerkleNode,
     i: pow::CompactTarget,
     j1: &'a RedeemScript,
     j2: &'a ScriptPubKey,
@@ -64,8 +62,6 @@ struct Structs<'a> {
     s: Txid,
     t: Wtxid,
     u: transaction::Version,
-    v: Witness,
-    // w: witness::Iter<'a>,
 }
 
 static REDEEM_SCRIPT: RedeemScriptBuf = RedeemScriptBuf::new();
@@ -84,9 +80,7 @@ struct CommonTraits {
     c: block::Header,
     d: block::Version,
     e: block::BlockHash,
-    f: block::WitnessCommitment,
     g: merkle_tree::TxMerkleNode,
-    h: merkle_tree::WitnessMerkleNode,
     i: pow::CompactTarget,
     // j: &'a Script,
     k: ScriptHash,
@@ -104,21 +98,17 @@ struct CommonTraits {
     s: Txid,
     t: Wtxid,
     u: transaction::Version,
-    v: Witness,
-    // w: witness::Iter<'a>,
 }
 
 /// A struct that includes all types that implement `Clone`.
 #[derive(Clone)] // C-COMMON-TRAITS: `Clone`
-struct Clone<'a> {
+struct Clone<> {
     a: block::Block<Checked>,
     b: block::Block<Unchecked>,
     c: block::Header,
     d: block::Version,
     e: block::BlockHash,
-    f: block::WitnessCommitment,
     g: merkle_tree::TxMerkleNode,
-    h: merkle_tree::WitnessMerkleNode,
     i: pow::CompactTarget,
     // j: &'a Script,
     k: ScriptHash,
@@ -136,8 +126,6 @@ struct Clone<'a> {
     s: Txid,
     t: Wtxid,
     u: transaction::Version,
-    v: Witness,
-    w: witness::Iter<'a>,
 }
 
 /// Public structs that derive common traits.
@@ -149,9 +137,7 @@ struct Ord {
     c: block::Header,
     d: block::Version,
     e: block::BlockHash,
-    f: block::WitnessCommitment,
     g: merkle_tree::TxMerkleNode,
-    h: merkle_tree::WitnessMerkleNode,
     i: pow::CompactTarget,
     // j: &'a Script,  // Doesn't implement `Clone`.
     k: ScriptHash,
@@ -169,7 +155,6 @@ struct Ord {
     s: Txid,
     t: Wtxid,
     u: transaction::Version,
-    v: Witness,
     // w: witness::Iter<'a>,
 }
 
@@ -188,7 +173,6 @@ struct Default {
     c4: TapScriptBuf,
     c5: WitnessScriptBuf,
     d: Sequence,
-    e: Witness,
 }
 
 /// A struct that includes all public error types.
@@ -234,7 +218,7 @@ fn api_can_use_all_units_types_from_module_amount_error() {
 #[test]
 fn api_can_use_modules_from_crate_root() {
     use bitcoin_primitives::{
-        block, locktime, merkle_tree, pow, script, sequence, transaction, witness,
+        block, locktime, merkle_tree, pow, script, sequence, transaction,
     };
 }
 
@@ -243,7 +227,7 @@ fn api_can_use_types_from_crate_root() {
     use bitcoin_primitives::{
         Block, BlockHash, BlockHeader, BlockVersion, CompactTarget, OutPoint, ScriptPubKey,
         ScriptPubKeyBuf, ScriptSig, ScriptSigBuf, Sequence, Transaction, TransactionVersion, TxIn,
-        TxMerkleNode, TxOut, Txid, Witness, WitnessCommitment, WitnessMerkleNode, Wtxid,
+        TxMerkleNode, TxOut, Txid, Wtxid,
     };
 }
 
@@ -289,14 +273,12 @@ fn api_all_non_error_types_have_non_empty_debug() {
 
     // All the structs.
     check_debug! {
-        block::Block::<Unchecked>::arbitrary(&mut u).unwrap().assume_checked(None);
+        block::Block::<Unchecked>::arbitrary(&mut u).unwrap().assume_checked();
         block::Block::<Unchecked>::arbitrary(&mut u).unwrap();
         block::Header::arbitrary(&mut u).unwrap();
         block::Version::arbitrary(&mut u).unwrap();
         block::BlockHash::from_byte_array(BYTES);
-        block::WitnessCommitment::from_byte_array(BYTES);
         merkle_tree::TxMerkleNode::from_byte_array(BYTES);
-        merkle_tree::WitnessMerkleNode::from_byte_array(BYTES);
         pow::CompactTarget::from_consensus(0x1d00_ffff);
         REDEEM_SCRIPT.as_script();
         SCRIPT_SIG.as_script();
@@ -318,7 +300,6 @@ fn api_all_non_error_types_have_non_empty_debug() {
         transaction.compute_txid();
         transaction.compute_wtxid();
         transaction.version;
-        Witness::arbitrary(&mut u).unwrap();
         // ad: witness::Iter<'a>,
     };
 }
@@ -355,7 +336,6 @@ fn regression_default() {
         c4: TapScriptBuf::from_bytes(Vec::new()),
         c5: WitnessScriptBuf::from_bytes(Vec::new()),
         d: Sequence::MAX,
-        e: Witness::new(),
     };
     assert_eq!(got, want);
 }

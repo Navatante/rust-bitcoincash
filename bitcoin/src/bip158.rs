@@ -612,7 +612,7 @@ mod test {
         for t in testdata.iter().skip(1) {
             let block_hash = t.get(1).unwrap().as_str().unwrap().parse::<BlockHash>().unwrap();
             let block: Block = deserialize(&hex(t.get(2).unwrap().as_str().unwrap())).unwrap();
-            let block = block.assume_checked(None);
+            let block = block.assume_checked();
             assert_eq!(block.block_hash(), block_hash);
             let scripts = t.get(3).unwrap().as_array().unwrap();
             let previous_filter_header =

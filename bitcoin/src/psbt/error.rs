@@ -9,7 +9,7 @@ use crate::bip32::Xpub;
 use crate::consensus::encode;
 use crate::prelude::Box;
 use crate::psbt::raw;
-use crate::{ecdsa, key, taproot, OutPoint, Transaction, Txid};
+use crate::{ecdsa, key, OutPoint, Transaction, Txid};
 
 /// Enum for marking psbt hash error.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -94,20 +94,12 @@ pub enum Error {
     InvalidPublicKey(key::FromSliceError),
     /// Parsing error indicating invalid secp256k1 public keys
     InvalidSecp256k1PublicKey(secp256k1::Error),
-    /// Parsing error indicating invalid xonly public keys
-    InvalidXOnlyPublicKey,
     /// Parsing error indicating invalid ECDSA signatures
     InvalidEcdsaSignature(ecdsa::DecodeError),
-    /// Parsing error indicating invalid Taproot signatures
-    InvalidTaprootSignature(taproot::SigFromSliceError),
     /// Parsing error indicating invalid control block
     InvalidControlBlock,
     /// Parsing error indicating invalid leaf version
     InvalidLeafVersion,
-    /// Parsing error indicating a Taproot error
-    Taproot(&'static str),
-    /// Taproot tree deserialization error
-    TapTree(taproot::IncompleteBuilderError),
     /// Error related to an xpub key
     XPubKey(&'static str),
     /// Error related to PSBT version
@@ -173,13 +165,9 @@ impl fmt::Display for Error {
             }
             InvalidPublicKey(ref e) => write_err!(f, "invalid public key"; e),
             InvalidSecp256k1PublicKey(ref e) => write_err!(f, "invalid secp256k1 public key"; e),
-            InvalidXOnlyPublicKey => f.write_str("invalid xonly public key"),
             InvalidEcdsaSignature(ref e) => write_err!(f, "invalid ECDSA signature"; e),
-            InvalidTaprootSignature(ref e) => write_err!(f, "invalid Taproot signature"; e),
             InvalidControlBlock => f.write_str("invalid control block"),
             InvalidLeafVersion => f.write_str("invalid leaf version"),
-            Taproot(s) => write!(f, "Taproot error -  {}", s),
-            TapTree(ref e) => write_err!(f, "Taproot tree error"; e),
             XPubKey(s) => write!(f, "xpub key error -  {}", s),
             Version(s) => write!(f, "version error {}", s),
             PartialDataConsumption =>
@@ -220,13 +208,9 @@ impl std::error::Error for Error {
             | IncorrectNonWitnessUtxo { .. }
             | InvalidPublicKey(_)
             | InvalidSecp256k1PublicKey(_)
-            | InvalidXOnlyPublicKey
             | InvalidEcdsaSignature(_)
-            | InvalidTaprootSignature(_)
             | InvalidControlBlock
             | InvalidLeafVersion
-            | Taproot(_)
-            | TapTree(_)
             | XPubKey(_)
             | Version(_)
             | PartialDataConsumption => None,

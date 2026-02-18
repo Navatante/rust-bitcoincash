@@ -5,22 +5,15 @@ use core::ops::Deref;
 
 use hex::FromHex as _;
 use internals::ToU64 as _;
-use secp256k1::{Secp256k1, Verification};
-
 use super::{
     opcode_to_verify, Builder, Instruction, PushBytes, ScriptBuf, ScriptExtPriv as _,
     ScriptPubKeyBuf,
 };
-use crate::key::{
-    PubkeyHash, PublicKey, TapTweak, TweakedPublicKey, UntweakedPublicKey, WPubkeyHash,
-};
+use crate::key::{PubkeyHash, PublicKey};
 use crate::opcodes::all::*;
 use crate::opcodes::{self, Opcode};
 use crate::prelude::Vec;
-use crate::script::witness_program::{WitnessProgram, P2A_PROGRAM};
-use crate::script::witness_version::WitnessVersion;
-use crate::script::{self, ScriptHash, WScriptHash};
-use crate::taproot::TapNodeHash;
+use crate::script::ScriptHash;
 use crate::{consensus, internal_macros};
 
 internal_macros::define_extension_trait! {
@@ -123,13 +116,6 @@ internal_macros::define_extension_trait! {
             Ok(Self::from_bytes(v))
         }
 
-        // This belongs only on RedeemScript and ScriptPubKey
-        /// Generates P2WPKH-type of scriptPubkey.
-        fn new_p2wpkh(pubkey_hash: WPubkeyHash) -> Self {
-            // pubkey hash is 20 bytes long, so it's safe to use `new_witness_program_unchecked` (Segwitv0)
-            script::new_witness_program_unchecked(WitnessVersion::V0, pubkey_hash)
-        }
-
     }
 }
 
@@ -166,43 +152,6 @@ crate::internal_macros::define_extension_trait! {
                 .into_script()
         }
 
-        /// Generates P2WSH-type of scriptPubkey with a given hash of the redeem script.
-        fn new_p2wsh(script_hash: WScriptHash) -> Self {
-            // script hash is 32 bytes long, so it's safe to use `new_witness_program_unchecked` (Segwitv0)
-            script::new_witness_program_unchecked(WitnessVersion::V0, script_hash)
-        }
-
-        /// Generates P2TR for script spending path using an internal public key and some optional
-        /// script tree Merkle root.
-        fn new_p2tr<C: Verification, K: Into<UntweakedPublicKey>>(
-            secp: &Secp256k1<C>,
-            internal_key: K,
-            merkle_root: Option<TapNodeHash>,
-        ) -> Self {
-            let internal_key = internal_key.into();
-            let (output_key, _) = internal_key.tap_tweak(secp, merkle_root);
-            // output key is 32 bytes long, so it's safe to use `new_witness_program_unchecked` (Segwitv1)
-            script::new_witness_program_unchecked(WitnessVersion::V1, output_key.serialize())
-        }
-
-        /// Generates P2TR for key spending path for a known [`TweakedPublicKey`].
-        fn new_p2tr_tweaked(output_key: TweakedPublicKey) -> Self {
-            // output key is 32 bytes long, so it's safe to use `new_witness_program_unchecked` (Segwitv1)
-            script::new_witness_program_unchecked(WitnessVersion::V1, output_key.serialize())
-        }
-
-        /// Generates pay to anchor output.
-        fn new_p2a() -> Self {
-            script::new_witness_program_unchecked(WitnessVersion::V1, P2A_PROGRAM)
-        }
-
-        /// Generates P2WSH-type of scriptPubkey with a given [`WitnessProgram`].
-        fn new_witness_program(witness_program: &WitnessProgram) -> Self {
-            Builder::new()
-                .push_opcode(witness_program.version().into())
-                .push_slice(witness_program.program())
-                .into_script()
-        }
     }
 }
 

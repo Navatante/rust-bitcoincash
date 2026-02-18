@@ -15,16 +15,16 @@ use internals::{compact_size, ToU64};
 use io::{BufRead, Write};
 
 use crate::consensus::encode::{self, Decodable, Encodable, WriteExt as _};
-use crate::merkle_tree::{MerkleNode as _, TxMerkleNode, WitnessMerkleNode};
+use crate::merkle_tree::{MerkleNode as _, TxMerkleNode};
 use crate::network::Params;
 use crate::prelude::Vec;
 use crate::script::{self, ScriptExt as _};
-use crate::transaction::{Coinbase, Transaction, TransactionExt as _, Wtxid};
+use crate::transaction::{Coinbase, Transaction, TransactionExt as _};
 use crate::{internal_macros, BlockTime, Target, Weight, Work};
 
 #[rustfmt::skip]                // Keep public re-exports separate.
 #[doc(inline)]
-pub use primitives::block::{Block, Checked, Unchecked, Validation, Version, BlockHash, Header, WitnessCommitment};
+pub use primitives::block::{Block, Checked, Unchecked, Validation, Version, BlockHash, Header};
 #[doc(no_inline)]
 pub use units::block::TooBigForRelativeHeightError;
 #[doc(inline)]
@@ -128,13 +128,8 @@ impl BlockUncheckedExt for Block<Unchecked> {
             return Err(InvalidBlockError::InvalidMerkleRoot);
         }
 
-        match check_witness_commitment(&transactions) {
-            (false, _) => Err(InvalidBlockError::InvalidWitnessCommitment),
-            (true, witness_root) => {
-                let block = Block::new_unchecked(header, transactions);
-                Ok(block.assume_checked(witness_root))
-            }
-        }
+        let block = Block::new_unchecked(header, transactions);
+        Ok(block.assume_checked())
     }
 }
 
@@ -144,93 +139,11 @@ pub fn compute_merkle_root(transactions: &[Transaction]) -> Option<TxMerkleNode>
     TxMerkleNode::calculate_root(hashes)
 }
 
-/// Computes the witness commitment for a list of transactions.
-pub fn compute_witness_commitment(
-    transactions: &[Transaction],
-    witness_reserved_value: &[u8],
-) -> Option<(WitnessMerkleNode, WitnessCommitment)> {
-    compute_witness_root(transactions).map(|witness_root| {
-        let mut encoder = sha256d::Hash::engine();
-        witness_root.consensus_encode(&mut encoder).expect("engines don't error");
-        encoder.input(witness_reserved_value);
-        let witness_commitment =
-            WitnessCommitment::from_byte_array(sha256d::Hash::from_engine(encoder).to_byte_array());
-        (witness_root, witness_commitment)
-    })
-}
-
-/// Computes the Merkle root of transactions hashed for witness.
-pub fn compute_witness_root(transactions: &[Transaction]) -> Option<WitnessMerkleNode> {
-    let hashes = transactions.iter().enumerate().map(|(i, t)| {
-        if i == 0 {
-            // Replace the first hash with zeroes.
-            Wtxid::COINBASE
-        } else {
-            t.compute_wtxid()
-        }
-    });
-    WitnessMerkleNode::calculate_root(hashes)
-}
-
 /// Checks if Merkle root of header matches Merkle root of the transaction list.
 fn check_merkle_root(header: &Header, transactions: &[Transaction]) -> bool {
     match compute_merkle_root(transactions) {
         Some(merkle_root) => header.merkle_root == merkle_root,
         None => false,
-    }
-}
-
-/// Checks if witness commitment in coinbase matches the transaction list.
-// Returns the Merkle root if it was computed (so it can be cached in `assume_checked`).
-fn check_witness_commitment(transactions: &[Transaction]) -> (bool, Option<WitnessMerkleNode>) {
-    // Witness commitment is optional if there are no transactions using SegWit in the block.
-    if transactions.iter().all(|t| t.inputs.iter().all(|i| i.witness.is_empty())) {
-        return (true, None);
-    }
-
-    if transactions.is_empty() {
-        return (false, None);
-    }
-
-    if transactions[0].is_coinbase() {
-        let coinbase = transactions[0].clone();
-        if let Some(commitment) = witness_commitment_from_coinbase(&coinbase) {
-            // Witness reserved value is in coinbase input witness.
-            let witness_vec: Vec<_> = coinbase.inputs[0].witness.iter().collect();
-            if witness_vec.len() == 1 && witness_vec[0].len() == 32 {
-                if let Some((witness_root, witness_commitment)) =
-                    compute_witness_commitment(transactions, witness_vec[0])
-                {
-                    if commitment == witness_commitment {
-                        return (true, Some(witness_root));
-                    }
-                }
-            }
-        }
-    }
-
-    (false, None)
-}
-
-fn witness_commitment_from_coinbase(coinbase: &Transaction) -> Option<WitnessCommitment> {
-    // Consists of OP_RETURN, OP_PUSHBYTES_36, and four "witness header" bytes.
-    const MAGIC: [u8; 6] = [0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed];
-
-    if !coinbase.is_coinbase() {
-        return None;
-    }
-
-    // Commitment is in the last output that starts with magic bytes.
-    if let Some(pos) = coinbase
-        .outputs
-        .iter()
-        .rposition(|o| o.script_pubkey.len() >= 38 && o.script_pubkey.as_bytes()[0..6] == MAGIC)
-    {
-        let bytes =
-            <[u8; 32]>::try_from(&coinbase.outputs[pos].script_pubkey.as_bytes()[6..38]).unwrap();
-        Some(WitnessCommitment::from_byte_array(bytes))
-    } else {
-        None
     }
 }
 
@@ -248,11 +161,6 @@ pub trait BlockCheckedExt: sealed::Sealed {
 
     /// Returns the transaction Merkle root.
     fn merkle_root(&self) -> TxMerkleNode;
-
-    /// Returns the Merkle root of transactions hashed for witness.
-    ///
-    /// This value was computed during block validation and was cached at that time.
-    fn witness_root(&mut self) -> Option<WitnessMerkleNode>;
 
     /// Returns the weight of the block.
     ///
@@ -285,8 +193,6 @@ impl BlockCheckedExt for Block<Checked> {
     }
 
     fn merkle_root(&self) -> TxMerkleNode { self.header().merkle_root }
-
-    fn witness_root(&mut self) -> Option<WitnessMerkleNode> { self.cached_witness_root() }
 
     fn weight(&self) -> Weight {
         // This is the exact definition of a weight unit, as defined by BIP-141 (quote above).
@@ -354,7 +260,7 @@ impl Encodable for Block<Unchecked> {
     fn consensus_encode<W: io::Write + ?Sized>(&self, w: &mut W) -> Result<usize, io::Error> {
         // TODO: Should we be able to encode without cloning?
         // This is ok, we decode as unchecked anyway.
-        let block = self.clone().assume_checked(None);
+        let block = self.clone().assume_checked();
         block.consensus_encode(w)
     }
 }
@@ -409,8 +315,6 @@ mod sealed {
 pub enum InvalidBlockError {
     /// Header Merkle root does not match the calculated Merkle root.
     InvalidMerkleRoot,
-    /// The witness commitment in coinbase transaction does not match the calculated witness_root.
-    InvalidWitnessCommitment,
     /// Block has no transactions (missing coinbase).
     NoTransactions,
     /// The first transaction is not a valid coinbase transaction.
@@ -427,7 +331,6 @@ impl fmt::Display for InvalidBlockError {
 
         match *self {
             InvalidMerkleRoot => write!(f, "header Merkle root does not match the calculated Merkle root"),
-            InvalidWitnessCommitment => write!(f, "the witness commitment in coinbase transaction does not match the calculated witness_root"),
             NoTransactions => write!(f, "block has no transactions (missing coinbase)"),
             InvalidCoinbase => write!(f, "the first transaction is not a valid coinbase transaction"),
         }
@@ -533,7 +436,7 @@ mod tests {
     use crate::pow::test_utils::{u128_to_work, u64_to_work};
     use crate::script::{ScriptPubKeyBuf, ScriptSigBuf};
     use crate::transaction::{OutPoint, Transaction, TxIn, TxOut, Txid};
-    use crate::{block, Amount, CompactTarget, Network, Sequence, TestnetVersion, Witness};
+    use crate::{block, Amount, CompactTarget, Network, Sequence, TestnetVersion};
 
     #[test]
     fn static_vector() {
@@ -543,7 +446,7 @@ mod tests {
         let (header, transactions) = block.into_parts();
 
         assert!(block::check_merkle_root(&header, &transactions));
-        let block = Block::new_unchecked(header, transactions).assume_checked(None);
+        let block = Block::new_unchecked(header, transactions).assume_checked();
 
         // Same as `block.check_merkle_root` but do it explicitly.
         let hashes_iter = block.transactions().iter().map(|obj| obj.compute_txid());
@@ -556,7 +459,7 @@ mod tests {
         // testnet block 100,000
         const BLOCK_HEX: &str = "0200000035ab154183570282ce9afc0b494c9fc6a3cfea05aa8c1add2ecc56490000000038ba3d78e4500a5a7570dbe61960398add4410d278b21cd9708e6d9743f374d544fc055227f1001c29c1ea3b0101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff3703a08601000427f1001c046a510100522cfabe6d6d0000000000000000000068692066726f6d20706f6f6c7365727665726aac1eeeed88ffffffff0100f2052a010000001976a914912e2b234f941f30b18afbb4fa46171214bf66c888ac00000000";
         let block: Block = deserialize(&hex!(BLOCK_HEX)).unwrap();
-        let block = block.assume_checked(None);
+        let block = block.assume_checked();
 
         let cb_txid = "d574f343976d8e70d91cb278d21044dd8a396019e6db70755a0a50e4783dba38";
         assert_eq!(block.coinbase().compute_txid().to_string(), cb_txid);
@@ -566,28 +469,28 @@ mod tests {
         // block with 3-byte bip34 push for height 0x03010000 (non-minimal 1)
         const BAD_HEX: &str = "0200000035ab154183570282ce9afc0b494c9fc6a3cfea05aa8c1add2ecc56490000000038ba3d78e4500a5a7570dbe61960398add4410d278b21cd9708e6d9743f374d544fc055227f1001c29c1ea3b0101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff3703010000000427f1001c046a510100522cfabe6d6d0000000000000000000068692066726f6d20706f6f6c7365727665726aac1eeeed88ffffffff0100f2052a010000001976a914912e2b234f941f30b18afbb4fa46171214bf66c888ac00000000";
         let bad: Block = deserialize(&hex!(BAD_HEX)).unwrap();
-        let bad = bad.assume_checked(None);
+        let bad = bad.assume_checked();
 
         assert_eq!(bad.bip34_block_height(), Err(super::Bip34Error::NonMinimalPush));
 
         // Block 15 on Testnet4 has height of 0x5f (15 PUSHNUM)
         const BLOCK_HEX_SMALL_HEIGHT_15: &str = "000000200fd8c4c1e88f313b561b2724542ff9be1bc54a7dab8db8ef6359d48a00000000705bf9145e6d3c413702cc61f32e4e7bfe3117b1eb928071a59adcf75694a3fb07d83866ffff001dcf4c5e8401010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff095f00062f4077697a2fffffffff0200f2052a010000001976a9140a59837ccd4df25adc31cdad39be6a8d97557ed688ac0000000000000000266a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf90120000000000000000000000000000000000000000000000000000000000000000000000000";
         let block: Block = deserialize(&hex!(BLOCK_HEX_SMALL_HEIGHT_15)).unwrap();
-        let block = block.assume_checked(None);
+        let block = block.assume_checked();
 
         assert_eq!(block.bip34_block_height(), Ok(15));
 
         // Block 42 on Testnet4 has height of 0x012a (42)
         const BLOCK_HEX_SMALL_HEIGHT_42: &str = "000000202803addb5a3f42f3e8d6c8536598b2d872b04f3b4f0698c26afdb17300000000463dd9a37a5d3d5c05f9c80a1485b41f1f513dee00338bbc33f5a6e836fce0345dda3866ffff001d872b9def01010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff09012a062f4077697a2fffffffff0200f2052a010000001976a9140a59837ccd4df25adc31cdad39be6a8d97557ed688ac0000000000000000266a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf90120000000000000000000000000000000000000000000000000000000000000000000000000";
         let block: Block = deserialize(&hex!(BLOCK_HEX_SMALL_HEIGHT_42)).unwrap();
-        let block = block.assume_checked(None);
+        let block = block.assume_checked();
 
         assert_eq!(block.bip34_block_height(), Ok(42));
 
         // Block 42 on Testnet4 using OP_PUSHDATA1 0x4c012a (42) instead of 0x012a (42)
         const BLOCK_HEX_SMALL_HEIGHT_42_WRONG: &str = "000000202803addb5a3f42f3e8d6c8536598b2d872b04f3b4f0698c26afdb17300000000463dd9a37a5d3d5c05f9c80a1485b41f1f513dee00338bbc33f5a6e836fce0345dda3866ffff001d872b9def01010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff0a4c012a062f4077697a2fffffffff0200f2052a010000001976a9140a59837ccd4df25adc31cdad39be6a8d97557ed688ac0000000000000000266a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf90120000000000000000000000000000000000000000000000000000000000000000000000000";
         let block: Block = deserialize(&hex!(BLOCK_HEX_SMALL_HEIGHT_42_WRONG)).unwrap();
-        let block = block.assume_checked(None);
+        let block = block.assume_checked();
 
         assert_eq!(block.bip34_block_height(), Err(super::Bip34Error::NonMinimalPush));
 
@@ -595,7 +498,7 @@ mod tests {
         // this is an overflow for ScriptNum (i32) parsing
         const BLOCK_HEX_5_BYTE_HEIGHT: &str = "000000202803addb5a3f42f3e8d6c8536598b2d872b04f3b4f0698c26afdb17300000000463dd9a37a5d3d5c05f9c80a1485b41f1f513dee00338bbc33f5a6e836fce0345dda3866ffff001d872b9def01010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff0d052a2a2a2a2a062f4077697a2fffffffff0200f2052a010000001976a9140a59837ccd4df25adc31cdad39be6a8d97557ed688ac0000000000000000266a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf90120000000000000000000000000000000000000000000000000000000000000000000000000";
         let block: Block = deserialize(&hex!(BLOCK_HEX_5_BYTE_HEIGHT)).unwrap();
-        let block = block.assume_checked(None);
+        let block = block.assume_checked();
 
         assert_eq!(block.bip34_block_height(), Err(super::Bip34Error::NotPresent));
     }
@@ -618,13 +521,9 @@ mod tests {
         assert!(bad_decode.is_err());
 
         let (header, transactions) = decode.unwrap().into_parts();
-        // should be also ok for a non-witness block as commitment is optional in that case
-        let (witness_commitment_matches, witness_root) =
-            block::check_witness_commitment(&transactions);
-        assert!(witness_commitment_matches);
 
         let real_decode =
-            Block::new_unchecked(header, transactions.clone()).assume_checked(witness_root);
+            Block::new_unchecked(header, transactions.clone()).assume_checked();
 
         assert_eq!(real_decode.header().version, Version::from_consensus(1));
         assert_eq!(serialize(&real_decode.header().prev_blockhash), prevhash);
@@ -670,12 +569,9 @@ mod tests {
         assert!(decode.is_ok());
 
         let (header, transactions) = decode.unwrap().into_parts();
-        let (witness_commitment_matches, witness_root) =
-            block::check_witness_commitment(&transactions);
-        assert!(witness_commitment_matches);
 
         let real_decode =
-            Block::new_unchecked(header, transactions.clone()).assume_checked(witness_root);
+            Block::new_unchecked(header, transactions.clone()).assume_checked();
 
         assert_eq!(real_decode.header().version, Version::from_consensus(0x2000_0000)); // VERSIONBITS but no bits set
         assert_eq!(serialize(&real_decode.header().prev_blockhash), prevhash);
@@ -708,13 +604,13 @@ mod tests {
         let decode: Result<Block, _> = deserialize(&block);
         assert!(decode.is_ok());
 
-        let real_decode = decode.unwrap().assume_checked(None);
+        let real_decode = decode.unwrap().assume_checked();
         assert_eq!(real_decode.header().version, Version::from_consensus(2147483647));
 
         let block2 = hex!("000000800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
         let decode2: Result<Block, _> = deserialize(&block2);
         assert!(decode2.is_ok());
-        let real_decode2 = decode2.unwrap().assume_checked(None);
+        let real_decode2 = decode2.unwrap().assume_checked();
         assert_eq!(real_decode2.header().version, Version::from_consensus(-2147483648));
     }
 
@@ -809,7 +705,6 @@ mod tests {
                 },
                 script_sig: ScriptSigBuf::new(),
                 sequence: Sequence::ENABLE_LOCKTIME_AND_RBF,
-                witness: Witness::new(),
             }],
             outputs: vec![TxOut { value: Amount::ONE_BTC, script_pubkey: ScriptPubKeyBuf::new() }],
         };
@@ -849,7 +744,6 @@ mod tests {
         // Test that coinbase method returns the expected transaction
         let expected_txid = genesis.transactions()[0].compute_txid();
         assert_eq!(coinbase.compute_txid(), expected_txid);
-        assert_eq!(coinbase.wtxid(), Wtxid::COINBASE);
 
         // Test that as_inner() returns the correct transaction
         assert_eq!(coinbase.as_transaction(), &genesis.transactions()[0]);
@@ -885,7 +779,6 @@ mod tests {
                 },
                 script_sig: ScriptSigBuf::new(),
                 sequence: Sequence::ENABLE_LOCKTIME_AND_RBF,
-                witness: Witness::new(),
             }],
             outputs: vec![TxOut { value: Amount::ONE_BTC, script_pubkey: ScriptPubKeyBuf::new() }],
         };
@@ -902,7 +795,7 @@ mod tests {
         // testnet block 100,000
         const BLOCK_HEX: &str = "0200000035ab154183570282ce9afc0b494c9fc6a3cfea05aa8c1add2ecc56490000000038ba3d78e4500a5a7570dbe61960398add4410d278b21cd9708e6d9743f374d544fc055227f1001c29c1ea3b0101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff3703a08601000427f1001c046a510100522cfabe6d6d0000000000000000000068692066726f6d20706f6f6c7365727665726aac1eeeed88ffffffff0100f2052a010000001976a914912e2b234f941f30b18afbb4fa46171214bf66c888ac00000000";
         let block: Block = deserialize(&hex!(BLOCK_HEX)).unwrap();
-        let block = block.assume_checked(None);
+        let block = block.assume_checked();
 
         // Test that BIP-0034 height extraction works with the Coinbase type
         assert_eq!(block.bip34_block_height(), Ok(100_000));

@@ -6,20 +6,15 @@ use core::str::FromStr;
 use hashes::{hash160, ripemd160, sha256, sha256d};
 
 use crate::bip32::KeySource;
-use crate::crypto::key::{PublicKey, XOnlyPublicKey};
-use crate::crypto::{ecdsa, taproot};
+use crate::crypto::key::PublicKey;
+use crate::crypto::ecdsa;
 use crate::prelude::{btree_map, BTreeMap, Borrow, Box, ToOwned, Vec};
 use crate::psbt::map::Map;
 use crate::psbt::serialize::Deserialize;
 use crate::psbt::{error, raw, Error};
-use crate::script::{RedeemScriptBuf, ScriptSigBuf, TapScriptBuf, WitnessScriptBuf};
-use crate::sighash::{
-    EcdsaSighashType, InvalidSighashTypeError, NonStandardSighashTypeError, SighashTypeParseError,
-    TapSighashType,
-};
-use crate::taproot::{ControlBlock, LeafVersion, TapLeafHash, TapNodeHash};
+use crate::script::{RedeemScriptBuf, ScriptSigBuf, WitnessScriptBuf};
+use crate::sighash::{EcdsaSighashType, NonStandardSighashTypeError, SighashTypeParseError};
 use crate::transaction::{Transaction, TxOut};
-use crate::witness::Witness;
 
 /// Type: Non-Witness UTXO PSBT_IN_NON_WITNESS_UTXO = 0x00
 const PSBT_IN_NON_WITNESS_UTXO: u64 = 0x00;
@@ -47,20 +42,6 @@ const PSBT_IN_SHA256: u64 = 0x0b;
 const PSBT_IN_HASH160: u64 = 0x0c;
 /// Type: HASH256 preimage PSBT_IN_HASH256 = 0x0d
 const PSBT_IN_HASH256: u64 = 0x0d;
-/// Type: Taproot Signature in Key Spend PSBT_IN_TAP_KEY_SIG = 0x13
-const PSBT_IN_TAP_KEY_SIG: u64 = 0x13;
-/// Type: Taproot Signature in Script Spend PSBT_IN_TAP_SCRIPT_SIG = 0x14
-const PSBT_IN_TAP_SCRIPT_SIG: u64 = 0x14;
-/// Type: Taproot Leaf Script PSBT_IN_TAP_LEAF_SCRIPT = 0x14
-const PSBT_IN_TAP_LEAF_SCRIPT: u64 = 0x15;
-/// Type: Taproot Key BIP-0032 Derivation Path PSBT_IN_TAP_BIP32_DERIVATION = 0x16
-const PSBT_IN_TAP_BIP32_DERIVATION: u64 = 0x16;
-/// Type: Taproot Internal Key PSBT_IN_TAP_INTERNAL_KEY = 0x17
-const PSBT_IN_TAP_INTERNAL_KEY: u64 = 0x17;
-/// Type: Taproot Merkle Root PSBT_IN_TAP_MERKLE_ROOT = 0x18
-const PSBT_IN_TAP_MERKLE_ROOT: u64 = 0x18;
-/// Type: MuSig2 Public Keys Participating in Aggregate Input PSBT_IN_MUSIG2_PARTICIPANT_PUBKEYS = 0x1a
-const PSBT_IN_MUSIG2_PARTICIPANT_PUBKEYS: u64 = 0x1a;
 /// Type: Proprietary Use Type PSBT_IN_PROPRIETARY = 0xFC
 const PSBT_IN_PROPRIETARY: u64 = 0xFC;
 
@@ -92,9 +73,6 @@ pub struct Input {
     /// The finalized, fully-constructed scriptSig with signatures and any other
     /// scripts necessary for this input to pass validation.
     pub final_script_sig: Option<ScriptSigBuf>,
-    /// The finalized, fully-constructed scriptWitness with signatures and any
-    /// other scripts necessary for this input to pass validation.
-    pub final_script_witness: Option<Witness>,
     /// RIPEMD160 hash to preimage map.
     pub ripemd160_preimages: BTreeMap<ripemd160::Hash, Vec<u8>>,
     /// SHA256 hash to preimage map.
@@ -103,20 +81,6 @@ pub struct Input {
     pub hash160_preimages: BTreeMap<hash160::Hash, Vec<u8>>,
     /// HASH256 hash to preimage map.
     pub hash256_preimages: BTreeMap<sha256d::Hash, Vec<u8>>,
-    /// Serialized Taproot signature with sighash type for key spend.
-    pub tap_key_sig: Option<taproot::Signature>,
-    /// Map of `<xonlypubkey>|<leafhash>` with signature.
-    pub tap_script_sigs: BTreeMap<(XOnlyPublicKey, TapLeafHash), taproot::Signature>,
-    /// Map of Control blocks to Script version pair.
-    pub tap_scripts: BTreeMap<ControlBlock, (TapScriptBuf, LeafVersion)>,
-    /// Map of tap root x only keys to origin info and leaf hashes contained in it.
-    pub tap_key_origins: BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
-    /// Taproot Internal key.
-    pub tap_internal_key: Option<XOnlyPublicKey>,
-    /// Taproot Merkle root.
-    pub tap_merkle_root: Option<TapNodeHash>,
-    /// Mapping from MuSig2 aggregate keys to the participant keys from which they were aggregated.
-    pub musig2_participant_pubkeys: BTreeMap<secp256k1::PublicKey, Vec<secp256k1::PublicKey>>,
     /// Proprietary key-value pairs for this input.
     pub proprietary: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
     /// Unknown key-value pairs for this input.
@@ -125,19 +89,13 @@ pub struct Input {
 
 /// A Signature hash type for the corresponding input.
 ///
-/// As of Taproot upgrade, the signature hash type can be either [`EcdsaSighashType`] or
-/// [`TapSighashType`] but it is not possible to know directly which signature hash type the user is
-/// dealing with. Therefore, the user is responsible for converting to/from [`PsbtSighashType`]
-/// from/to the desired signature hash type they need.
-///
 /// # Examples
 ///
 /// ```
-/// use bitcoin::{EcdsaSighashType, TapSighashType};
+/// use bitcoin::EcdsaSighashType;
 /// use bitcoin::psbt::PsbtSighashType;
 ///
 /// let _ecdsa_sighash_all: PsbtSighashType = EcdsaSighashType::All.into();
-/// let _tap_sighash_all: PsbtSighashType = TapSighashType::All.into();
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PsbtSighashType {
@@ -146,9 +104,9 @@ pub struct PsbtSighashType {
 
 impl fmt::Display for PsbtSighashType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.taproot_hash_ty() {
+        match self.ecdsa_hash_ty() {
             Err(_) => write!(f, "{:#x}", self.inner),
-            Ok(taproot_hash_ty) => fmt::Display::fmt(&taproot_hash_ty, f),
+            Ok(ecdsa_hash_ty) => fmt::Display::fmt(&ecdsa_hash_ty, f),
         }
     }
 }
@@ -159,11 +117,7 @@ impl FromStr for PsbtSighashType {
     #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // We accept strings of form: "SIGHASH_ALL" etc.
-        //
-        // NB: some of Taproot sighash types are non-standard for pre-Taproot
-        // inputs. We also do not support SIGHASH_RESERVED in verbatim form
-        // ("0xFF" string should be used instead).
-        if let Ok(ty) = s.parse::<TapSighashType>() {
+        if let Ok(ty) = s.parse::<EcdsaSighashType>() {
             return Ok(ty.into());
         }
 
@@ -181,26 +135,15 @@ impl From<EcdsaSighashType> for PsbtSighashType {
     }
 }
 
-impl From<TapSighashType> for PsbtSighashType {
-    fn from(taproot_hash_ty: TapSighashType) -> Self {
-        PsbtSighashType { inner: taproot_hash_ty as u32 }
-    }
-}
-
 impl PsbtSighashType {
-    /// Ambiguous `ALL` sighash type, may refer to either [`EcdsaSighashType::All`]
-    /// or [`TapSighashType::All`].
-    ///
-    /// This is equivalent to either `EcdsaSighashType::All.into()` or `TapSighashType::All.into()`.
-    /// For sighash types other than `ALL` use the ECDSA or Taproot sighash type directly.
+    /// `ALL` sighash type, equivalent to [`EcdsaSighashType::All`].
     ///
     /// # Examples
     ///
     /// ```
-    /// use bitcoin::{EcdsaSighashType, TapSighashType};
+    /// use bitcoin::EcdsaSighashType;
     /// use bitcoin::psbt::PsbtSighashType;
     /// let _ecdsa_sighash_anyone_can_pay: PsbtSighashType = EcdsaSighashType::AllPlusAnyoneCanPay.into();
-    /// let _tap_sighash_anyone_can_pay: PsbtSighashType = TapSighashType::AllPlusAnyoneCanPay.into();
     /// ```
     pub const ALL: PsbtSighashType = PsbtSighashType { inner: 0x01 };
 
@@ -210,20 +153,9 @@ impl PsbtSighashType {
         EcdsaSighashType::from_standard(self.inner)
     }
 
-    /// Returns the [`TapSighashType`] if the [`PsbtSighashType`] can be
-    /// converted to one.
-    pub fn taproot_hash_ty(self) -> Result<TapSighashType, InvalidSighashTypeError> {
-        if self.inner > 0xffu32 {
-            Err(InvalidSighashTypeError(self.inner))
-        } else {
-            TapSighashType::from_consensus_u8(self.inner as u8)
-        }
-    }
-
     /// Constructs a new [`PsbtSighashType`] from a raw `u32`.
     ///
-    /// Allows construction of a non-standard or non-valid sighash flag
-    /// ([`EcdsaSighashType`], [`TapSighashType`] respectively).
+    /// Allows construction of a non-standard or non-valid [`EcdsaSighashType`] sighash flag.
     pub fn from_u32(n: u32) -> PsbtSighashType { PsbtSighashType { inner: n } }
 
     /// Converts [`PsbtSighashType`] to a raw `u32` sighash flag.
@@ -243,18 +175,6 @@ impl Input {
         self.sighash_type
             .map(|sighash_type| sighash_type.ecdsa_hash_ty())
             .unwrap_or(Ok(EcdsaSighashType::All))
-    }
-
-    /// Obtains the [`TapSighashType`] for this input if one is specified. If no sighash type is
-    /// specified, returns [`TapSighashType::Default`].
-    ///
-    /// # Errors
-    ///
-    /// If the `sighash_type` field is set to a invalid Taproot sighash value.
-    pub fn taproot_hash_ty(&self) -> Result<TapSighashType, InvalidSighashTypeError> {
-        self.sighash_type
-            .map(|sighash_type| sighash_type.taproot_hash_ty())
-            .unwrap_or(Ok(TapSighashType::Default))
     }
 
     pub(super) fn insert_pair(&mut self, pair: raw::Pair) -> Result<(), Error> {
@@ -301,11 +221,6 @@ impl Input {
                     self.final_script_sig <= <raw_key: _>|<raw_value: ScriptSigBuf>
                 }
             }
-            PSBT_IN_FINAL_SCRIPTWITNESS => {
-                impl_psbt_insert_pair! {
-                    self.final_script_witness <= <raw_key: _>|<raw_value: Witness>
-                }
-            }
             PSBT_IN_RIPEMD160 => {
                 psbt_insert_hash_pair! {
                     &mut self.ripemd160_preimages <= raw_key|raw_value|ripemd160|error::PsbtHash::Ripemd
@@ -324,41 +239,6 @@ impl Input {
             PSBT_IN_HASH256 => {
                 psbt_insert_hash_pair! {
                     &mut self.hash256_preimages <= raw_key|raw_value|sha256d|error::PsbtHash::Hash256
-                }
-            }
-            PSBT_IN_TAP_KEY_SIG => {
-                impl_psbt_insert_pair! {
-                    self.tap_key_sig <= <raw_key: _>|<raw_value: taproot::Signature>
-                }
-            }
-            PSBT_IN_TAP_SCRIPT_SIG => {
-                impl_psbt_insert_pair! {
-                    self.tap_script_sigs <= <raw_key: (XOnlyPublicKey, TapLeafHash)>|<raw_value: taproot::Signature>
-                }
-            }
-            PSBT_IN_TAP_LEAF_SCRIPT => {
-                impl_psbt_insert_pair! {
-                    self.tap_scripts <= <raw_key: ControlBlock>|< raw_value: (TapScriptBuf, LeafVersion)>
-                }
-            }
-            PSBT_IN_TAP_BIP32_DERIVATION => {
-                impl_psbt_insert_pair! {
-                    self.tap_key_origins <= <raw_key: XOnlyPublicKey>|< raw_value: (Vec<TapLeafHash>, KeySource)>
-                }
-            }
-            PSBT_IN_TAP_INTERNAL_KEY => {
-                impl_psbt_insert_pair! {
-                    self.tap_internal_key <= <raw_key: _>|< raw_value: XOnlyPublicKey>
-                }
-            }
-            PSBT_IN_TAP_MERKLE_ROOT => {
-                impl_psbt_insert_pair! {
-                    self.tap_merkle_root <= <raw_key: _>|< raw_value: TapNodeHash>
-                }
-            }
-            PSBT_IN_MUSIG2_PARTICIPANT_PUBKEYS => {
-                impl_psbt_insert_pair! {
-                    self.musig2_participant_pubkeys <= <raw_key: secp256k1::PublicKey>|< raw_value: Vec<secp256k1::PublicKey> >
                 }
             }
             PSBT_IN_PROPRIETARY => {
@@ -396,20 +276,12 @@ impl Input {
         self.sha256_preimages.extend(other.sha256_preimages);
         self.hash160_preimages.extend(other.hash160_preimages);
         self.hash256_preimages.extend(other.hash256_preimages);
-        self.tap_script_sigs.extend(other.tap_script_sigs);
-        self.tap_scripts.extend(other.tap_scripts);
-        self.tap_key_origins.extend(other.tap_key_origins);
-        self.musig2_participant_pubkeys.extend(other.musig2_participant_pubkeys);
         self.proprietary.extend(other.proprietary);
         self.unknown.extend(other.unknown);
 
         combine!(redeem_script, self, other);
         combine!(witness_script, self, other);
         combine!(final_script_sig, self, other);
-        combine!(final_script_witness, self, other);
-        combine!(tap_key_sig, self, other);
-        combine!(tap_internal_key, self, other);
-        combine!(tap_merkle_root, self, other);
     }
 }
 
@@ -450,10 +322,6 @@ impl Map for Input {
         }
 
         impl_psbt_get_pair! {
-            rv.push(self.final_script_witness, PSBT_IN_FINAL_SCRIPTWITNESS)
-        }
-
-        impl_psbt_get_pair! {
             rv.push_map(self.ripemd160_preimages, PSBT_IN_RIPEMD160)
         }
 
@@ -467,34 +335,6 @@ impl Map for Input {
 
         impl_psbt_get_pair! {
             rv.push_map(self.hash256_preimages, PSBT_IN_HASH256)
-        }
-
-        impl_psbt_get_pair! {
-            rv.push(self.tap_key_sig, PSBT_IN_TAP_KEY_SIG)
-        }
-
-        impl_psbt_get_pair! {
-            rv.push_map(self.tap_script_sigs, PSBT_IN_TAP_SCRIPT_SIG)
-        }
-
-        impl_psbt_get_pair! {
-            rv.push_map(self.tap_scripts, PSBT_IN_TAP_LEAF_SCRIPT)
-        }
-
-        impl_psbt_get_pair! {
-            rv.push_map(self.tap_key_origins, PSBT_IN_TAP_BIP32_DERIVATION)
-        }
-
-        impl_psbt_get_pair! {
-            rv.push(self.tap_internal_key, PSBT_IN_TAP_INTERNAL_KEY)
-        }
-
-        impl_psbt_get_pair! {
-            rv.push(self.tap_merkle_root, PSBT_IN_TAP_MERKLE_ROOT)
-        }
-
-        impl_psbt_get_pair! {
-            rv.push_map(self.musig2_participant_pubkeys, PSBT_IN_MUSIG2_PARTICIPANT_PUBKEYS)
         }
 
         for (key, value) in self.proprietary.iter() {
@@ -534,25 +374,6 @@ mod test {
     }
 
     #[test]
-    fn psbt_sighash_type_taproot() {
-        for tap in &[
-            TapSighashType::Default,
-            TapSighashType::All,
-            TapSighashType::None,
-            TapSighashType::Single,
-            TapSighashType::AllPlusAnyoneCanPay,
-            TapSighashType::NonePlusAnyoneCanPay,
-            TapSighashType::SinglePlusAnyoneCanPay,
-        ] {
-            let sighash = PsbtSighashType::from(*tap);
-            let s = format!("{}", sighash);
-            let back = s.parse::<PsbtSighashType>().unwrap();
-            assert_eq!(back, sighash);
-            assert_eq!(back.taproot_hash_ty().unwrap(), *tap);
-        }
-    }
-
-    #[test]
     fn psbt_sighash_type_notstd() {
         let nonstd = 0xdddddddd;
         let sighash = PsbtSighashType { inner: nonstd };
@@ -561,13 +382,11 @@ mod test {
 
         assert_eq!(back, sighash);
         assert_eq!(back.ecdsa_hash_ty(), Err(NonStandardSighashTypeError(nonstd)));
-        assert_eq!(back.taproot_hash_ty(), Err(InvalidSighashTypeError(nonstd)));
     }
 
     #[test]
     fn psbt_sighash_const_all() {
         assert_eq!(PsbtSighashType::ALL.to_u32(), 0x01);
         assert_eq!(PsbtSighashType::ALL.ecdsa_hash_ty().unwrap(), EcdsaSighashType::All);
-        assert_eq!(PsbtSighashType::ALL.taproot_hash_ty().unwrap(), TapSighashType::All);
     }
 }

@@ -37,10 +37,8 @@ use units::{Amount, Weight};
 use crate::prelude::Vec;
 #[cfg(feature = "alloc")]
 use crate::script::{ScriptPubKeyBuf, ScriptSigBuf};
-#[cfg(feature = "alloc")]
-use crate::witness::Witness;
 
-/// Bitcoin transaction.
+/// Bitcoin Cash transaction.
 ///
 /// An authenticated movement of coins.
 ///
@@ -54,34 +52,8 @@ use crate::witness::Witness;
 ///
 /// # Serialization notes
 ///
-/// If any inputs have nonempty witnesses, the entire transaction is serialized
-/// in the post-BIP-0141 SegWit format which includes a list of witnesses. If all
-/// inputs have empty witnesses, the transaction is serialized in the pre-BIP-0141
-/// format.
-///
-/// There is one major exception to this: to avoid deserialization ambiguity,
-/// if the transaction has no inputs, it is serialized in the BIP-0141 style. Be
-/// aware that this differs from the transaction format in PSBT, which _never_
-/// uses BIP-0141. (Ordinarily there is no conflict, since in PSBT transactions
-/// are always unsigned and therefore their inputs have empty witnesses.)
-///
-/// The specific ambiguity is that SegWit uses the flag bytes `0001` where an old
-/// serializer would read the number of transaction inputs. The old serializer
-/// would interpret this as "no inputs, one output", which means the transaction
-/// is invalid, and simply reject it. SegWit further specifies that this encoding
-/// should *only* be used when some input has a nonempty witness; that is,
-/// witness-less transactions should be encoded in the traditional format.
-///
-/// However, in protocols where transactions may legitimately have 0 inputs, e.g.
-/// when parties are cooperatively funding a transaction, the "00 means SegWit"
-/// heuristic does not work. Since SegWit requires such a transaction be encoded
-/// in the original transaction format (since it has no inputs and therefore
-/// no input witnesses), a traditionally encoded transaction may have the `0001`
-/// SegWit flag in it, which confuses most SegWit parsers including the one in
-/// Bitcoin Core.
-///
-/// We therefore deviate from the spec by always using the SegWit witness encoding
-/// for 0-input transactions, which results in unambiguously parseable transactions.
+/// Bitcoin Cash uses the pre-SegWit (legacy) serialization format. There are no
+/// witness fields in BCH transactions.
 ///
 /// # A note on ordering
 ///
@@ -138,7 +110,6 @@ impl Transaction {
                 .iter()
                 .map(|txin| TxIn {
                     script_sig: ScriptSigBuf::new(),
-                    witness: Witness::default(),
                     ..*txin
                 })
                 .collect(),
@@ -149,38 +120,22 @@ impl Transaction {
 
     /// Computes the [`Txid`].
     ///
-    /// Hashes the transaction **excluding** the SegWit data (i.e. the marker, flag bytes, and the
-    /// witness fields themselves). For non-SegWit transactions which do not have any SegWit data,
-    /// this will be equal to [`Transaction::compute_wtxid()`].
+    /// In Bitcoin Cash, this is the same as the wtxid since BCH uses legacy serialization only.
     #[doc(alias = "txid")]
     #[inline]
     pub fn compute_txid(&self) -> Txid {
-        let hash = hash_transaction(self, false);
+        let hash = hash_transaction(self);
         Txid::from_byte_array(hash.to_byte_array())
     }
 
-    /// Computes the SegWit version of the transaction id.
+    /// Computes the transaction id.
     ///
-    /// Hashes the transaction **including** all SegWit data (i.e. the marker, flag bytes, and the
-    /// witness fields themselves). For non-SegWit transactions which do not have any SegWit data,
-    /// this will be equal to [`Transaction::compute_txid()`].
+    /// In Bitcoin Cash, wtxid is identical to txid since there is no SegWit.
     #[doc(alias = "wtxid")]
     #[inline]
     pub fn compute_wtxid(&self) -> Wtxid {
-        let hash = hash_transaction(self, self.uses_segwit_serialization());
+        let hash = hash_transaction(self);
         Wtxid::from_byte_array(hash.to_byte_array())
-    }
-
-    /// Returns whether or not to serialize transaction as specified in BIP-144.
-    // This is duplicated in `bitcoin`, if you change it please do so in both places.
-    #[inline]
-    fn uses_segwit_serialization(&self) -> bool {
-        if self.inputs.iter().any(|input| !input.witness.is_empty()) {
-            return true;
-        }
-        // To avoid serialization ambiguity, no inputs means we use BIP-0141 serialization (see
-        // `Transaction` docs for full explanation).
-        self.inputs.is_empty()
     }
 }
 
@@ -225,29 +180,16 @@ impl From<&Transaction> for Wtxid {
     fn from(tx: &Transaction) -> Wtxid { tx.compute_wtxid() }
 }
 
-// Duplicated in `bitcoin`.
-/// The marker MUST be a 1-byte zero value: 0x00. (BIP-141)
-#[cfg(feature = "alloc")]
-const SEGWIT_MARKER: u8 = 0x00;
-/// The flag MUST be a 1-byte non-zero value. Currently, 0x01 MUST be used. (BIP-141)
-#[cfg(feature = "alloc")]
-const SEGWIT_FLAG: u8 = 0x01;
-
 // This is equivalent to consensus encoding but hashes the fields manually.
+// Bitcoin Cash uses legacy (pre-SegWit) serialization only.
 #[cfg(feature = "alloc")]
-fn hash_transaction(tx: &Transaction, uses_segwit_serialization: bool) -> sha256d::Hash {
+fn hash_transaction(tx: &Transaction) -> sha256d::Hash {
     use hashes::HashEngine as _;
 
     let mut enc = sha256d::Hash::engine();
     enc.input(&tx.version.0.to_le_bytes()); // Same as `encode::emit_i32`.
 
-    if uses_segwit_serialization {
-        // BIP-141 (SegWit) transaction serialization also includes marker and flag.
-        enc.input(&[SEGWIT_MARKER]);
-        enc.input(&[SEGWIT_FLAG]);
-    }
-
-    // Encode inputs (excluding witness data) with leading compact size encoded int.
+    // Encode inputs with leading compact size encoded int.
     let input_len = tx.inputs.len();
     enc.input(compact_size::encode(input_len).as_slice());
     for input in &tx.inputs {
@@ -274,25 +216,13 @@ fn hash_transaction(tx: &Transaction, uses_segwit_serialization: bool) -> sha256
         enc.input(script_pubkey_bytes);
     }
 
-    if uses_segwit_serialization {
-        // BIP-141 (SegWit) transaction serialization also includes the witness data.
-        for input in &tx.inputs {
-            // Same as `Encodable for Witness`.
-            enc.input(compact_size::encode(input.witness.len()).as_slice());
-            for element in &input.witness {
-                enc.input(compact_size::encode(element.len()).as_slice());
-                enc.input(element);
-            }
-        }
-    }
-
     // Same as `Encodable for absolute::LockTime`.
     enc.input(&tx.lock_time.to_consensus_u32().to_le_bytes());
 
     sha256d::Hash::from_engine(enc)
 }
 
-/// Bitcoin transaction input.
+/// Bitcoin Cash transaction input.
 ///
 /// It contains the location of the previous transaction's output,
 /// that it spends and set of scripts that satisfy its spending
@@ -314,12 +244,6 @@ pub struct TxIn {
     /// to ignore this feature. This is generally never used since
     /// the miner behavior cannot be enforced.
     pub sequence: Sequence,
-    /// Witness data: an array of byte-arrays.
-    /// Note that this field is *not* (de)serialized with the rest of the `TxIn` in
-    /// Encodable/Decodable, as it is (de)serialized at the end of the full
-    /// Transaction. It *is* (de)serialized with the rest of the `TxIn` in other
-    /// (de)serialization routines.
-    pub witness: Witness,
 }
 
 #[cfg(feature = "alloc")]
@@ -329,7 +253,6 @@ impl TxIn {
         previous_output: OutPoint::COINBASE_PREVOUT,
         script_sig: ScriptSigBuf::new(),
         sequence: Sequence::MAX,
-        witness: Witness::new(),
     };
 }
 
@@ -607,7 +530,6 @@ impl<'a> Arbitrary<'a> for TxIn {
             previous_output: OutPoint::arbitrary(u)?,
             script_sig: ScriptSigBuf::arbitrary(u)?,
             sequence: Sequence::arbitrary(u)?,
-            witness: Witness::arbitrary(u)?,
         })
     }
 }
@@ -686,7 +608,6 @@ mod tests {
             },
             script_sig: ScriptSigBuf::new(),
             sequence: Sequence::MAX,
-            witness: Witness::new(),
         };
 
         let txout = TxOut {
@@ -707,11 +628,6 @@ mod tests {
         tx.outputs[0].value = Amount::from_sat(987_654_321).unwrap();
         assert_eq!(tx.inputs[0].previous_output.txid.to_byte_array(), [0xFF; 32]);
         assert_eq!(tx.outputs[0].value.to_sat(), 987_654_321);
-
-        // Test uses_segwit_serialization
-        assert!(!tx.uses_segwit_serialization());
-        tx.inputs[0].witness.push(vec![0xAB, 0xCD, 0xEF]);
-        assert!(tx.uses_segwit_serialization());
 
         // Test partial ord
         assert!(tx > tx_orig);

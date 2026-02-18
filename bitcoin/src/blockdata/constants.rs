@@ -13,7 +13,6 @@ use crate::network::{Network, Params};
 use crate::opcodes::all::*;
 use crate::pow::CompactTarget;
 use crate::transaction::{self, OutPoint, Transaction, TxIn, TxOut};
-use crate::witness::Witness;
 use crate::{script, Amount, BlockHash, BlockTime, Sequence, TestnetVersion};
 
 /// How many seconds between blocks we expect on average.
@@ -109,7 +108,6 @@ fn bitcoin_genesis_tx(params: &Params) -> Transaction {
         previous_output: OutPoint::COINBASE_PREVOUT,
         script_sig: in_script,
         sequence: Sequence::MAX,
-        witness: Witness::default(),
     });
 
     ret.outputs.push(TxOut { value: Amount::FIFTY_BTC, script_pubkey: out_script });
@@ -123,7 +121,6 @@ pub fn genesis_block(params: impl AsRef<Params>) -> Block<Checked> {
     let params = params.as_ref();
     let transactions = vec![bitcoin_genesis_tx(params)];
     let merkle_root = block::compute_merkle_root(&transactions).expect("transactions is not empty");
-    let witness_root = block::compute_witness_root(&transactions);
 
     match params.network {
         Network::Bitcoin => Block::new_unchecked(
@@ -137,7 +134,7 @@ pub fn genesis_block(params: impl AsRef<Params>) -> Block<Checked> {
             },
             transactions,
         )
-        .assume_checked(witness_root),
+        .assume_checked(),
         Network::Testnet(TestnetVersion::V3) => Block::new_unchecked(
             block::Header {
                 version: block::Version::ONE,
@@ -149,7 +146,7 @@ pub fn genesis_block(params: impl AsRef<Params>) -> Block<Checked> {
             },
             transactions,
         )
-        .assume_checked(witness_root),
+        .assume_checked(),
         Network::Testnet(TestnetVersion::V4) => Block::new_unchecked(
             block::Header {
                 version: block::Version::ONE,
@@ -161,7 +158,7 @@ pub fn genesis_block(params: impl AsRef<Params>) -> Block<Checked> {
             },
             transactions,
         )
-        .assume_checked(witness_root),
+        .assume_checked(),
         Network::Signet => Block::new_unchecked(
             block::Header {
                 version: block::Version::ONE,
@@ -173,7 +170,7 @@ pub fn genesis_block(params: impl AsRef<Params>) -> Block<Checked> {
             },
             transactions,
         )
-        .assume_checked(witness_root),
+        .assume_checked(),
         Network::Regtest => Block::new_unchecked(
             block::Header {
                 version: block::Version::ONE,
@@ -185,7 +182,7 @@ pub fn genesis_block(params: impl AsRef<Params>) -> Block<Checked> {
             },
             transactions,
         )
-        .assume_checked(witness_root),
+        .assume_checked(),
     }
 }
 

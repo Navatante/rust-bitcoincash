@@ -14,8 +14,6 @@ fn do_test(data: &[u8]) {
             // Manually call all compute functions with unchecked block data.
             let (header, transactions) = block.into_parts();
             block::compute_merkle_root(&transactions);
-            block::compute_witness_commitment(&transactions, &[]); // TODO: Is empty slice ok?
-            block::compute_witness_root(&transactions);
 
             if let Ok(block) = Block::new_checked(header, transactions) {
                 let _ = block.bip34_block_height();

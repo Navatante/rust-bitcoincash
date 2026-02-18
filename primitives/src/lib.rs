@@ -48,8 +48,6 @@ pub mod pow;
 #[cfg(feature = "alloc")]
 pub mod script;
 pub mod transaction;
-#[cfg(feature = "alloc")]
-pub mod witness;
 
 #[doc(inline)]
 pub use units::{
@@ -79,12 +77,11 @@ pub use self::{
         TapScript, TapScriptBuf, WitnessScript, WitnessScriptBuf,
     },
     transaction::{Transaction, TxIn, TxOut},
-    witness::Witness,
 };
 #[doc(inline)]
 pub use self::{
-    block::{BlockHash, Header as BlockHeader, Version as BlockVersion, WitnessCommitment},
-    merkle_tree::{TxMerkleNode, WitnessMerkleNode},
+    block::{BlockHash, Header as BlockHeader, Version as BlockVersion},
+    merkle_tree::TxMerkleNode,
     pow::CompactTarget,
     transaction::{Ntxid, OutPoint, Txid, Version as TransactionVersion, Wtxid},
 };

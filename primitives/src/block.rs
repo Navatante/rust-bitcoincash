@@ -17,8 +17,6 @@ use hashes::{sha256d, HashEngine as _};
 use units::BlockTime;
 
 use crate::merkle_tree::TxMerkleNode;
-#[cfg(feature = "alloc")]
-use crate::merkle_tree::WitnessMerkleNode;
 use crate::pow::CompactTarget;
 #[cfg(feature = "alloc")]
 use crate::prelude::Vec;
@@ -37,7 +35,6 @@ pub use units::block::TooBigForRelativeHeightError;
 /// We define valid as:
 ///
 /// * The Merkle root of the header matches Merkle root of the transaction list.
-/// * The witness commitment in coinbase matches the transaction list.
 ///
 /// See `bitcoin::block::BlockUncheckedExt::validate()`.
 #[cfg(feature = "alloc")]
@@ -67,8 +64,6 @@ where
     header: Header,
     /// List of transactions contained in the block
     transactions: Vec<Transaction>,
-    /// Cached witness root if it's been computed.
-    witness_root: Option<WitnessMerkleNode>,
     /// Validation marker.
     marker: PhantomData<V>,
 }
@@ -78,7 +73,7 @@ impl Block<Unchecked> {
     /// Constructs a new `Block` without doing any validation.
     #[inline]
     pub fn new_unchecked(header: Header, transactions: Vec<Transaction>) -> Block<Unchecked> {
-        Block { header, transactions, witness_root: None, marker: PhantomData::<Unchecked> }
+        Block { header, transactions, marker: PhantomData::<Unchecked> }
     }
 
     /// Ignores block validation logic and just assumes you know what you are doing.
@@ -86,11 +81,10 @@ impl Block<Unchecked> {
     /// You should only use this function if you trust the block i.e., it comes from a trusted node.
     #[must_use]
     #[inline]
-    pub fn assume_checked(self, witness_root: Option<WitnessMerkleNode>) -> Block<Checked> {
+    pub fn assume_checked(self) -> Block<Checked> {
         Block {
             header: self.header,
             transactions: self.transactions,
-            witness_root,
             marker: PhantomData::<Checked>,
         }
     }
@@ -110,12 +104,6 @@ impl Block<Checked> {
     #[inline]
     pub fn transactions(&self) -> &[Transaction] { &self.transactions }
 
-    /// Returns the cached witness root if one is present.
-    ///
-    /// It is assumed that a block will have the witness root calculated and cached as part of the
-    /// validation process.
-    #[inline]
-    pub fn cached_witness_root(&self) -> Option<WitnessMerkleNode> { self.witness_root }
 }
 
 #[cfg(feature = "alloc")]
@@ -332,16 +320,14 @@ impl Default for Version {
 hashes::hash_newtype! {
     /// A bitcoin block hash.
     pub struct BlockHash(sha256d::Hash);
-    /// A hash corresponding to the witness structure commitment in the coinbase transaction.
-    pub struct WitnessCommitment(sha256d::Hash);
 }
 
 #[cfg(feature = "hex")]
-hashes::impl_hex_for_newtype!(BlockHash, WitnessCommitment);
+hashes::impl_hex_for_newtype!(BlockHash);
 #[cfg(not(feature = "hex"))]
-hashes::impl_debug_only_for_newtype!(BlockHash, WitnessCommitment);
+hashes::impl_debug_only_for_newtype!(BlockHash);
 #[cfg(feature = "serde")]
-hashes::impl_serde_for_newtype!(BlockHash, WitnessCommitment);
+hashes::impl_serde_for_newtype!(BlockHash);
 
 impl BlockHash {
     /// Dummy hash used as the previous blockhash of the genesis block.
@@ -484,11 +470,9 @@ mod tests {
         let header = dummy_header();
         let transactions = vec![];
         let block = Block::new_unchecked(header, transactions.clone());
-        let witness_root = Some(WitnessMerkleNode::from_byte_array([0x88; 32]));
-        let checked_block = block.assume_checked(witness_root);
+        let checked_block = block.assume_checked();
         assert_eq!(checked_block.header(), &header);
         assert_eq!(checked_block.transactions(), &transactions);
-        assert_eq!(checked_block.cached_witness_root(), witness_root);
     }
 
     #[test]
@@ -500,17 +484,6 @@ mod tests {
         let (block_header, block_transactions) = block.into_parts();
         assert_eq!(block_header, header);
         assert_eq!(block_transactions, transactions);
-    }
-
-    #[test]
-    #[cfg(feature = "alloc")]
-    fn block_cached_witness_root() {
-        let header = dummy_header();
-        let transactions = vec![];
-        let block = Block::new_unchecked(header, transactions);
-        let witness_root = Some(WitnessMerkleNode::from_byte_array([0x88; 32]));
-        let checked_block = block.assume_checked(witness_root);
-        assert_eq!(checked_block.cached_witness_root(), witness_root);
     }
 
     #[test]

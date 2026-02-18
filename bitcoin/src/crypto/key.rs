@@ -21,8 +21,6 @@ use crate::crypto::ecdsa;
 use crate::internal_macros::impl_asref_push_bytes;
 use crate::network::NetworkKind;
 use crate::prelude::{DisplayHex, String, Vec};
-use crate::script::{self, WitnessScriptBuf};
-use crate::taproot::{TapNodeHash, TapTweakHash};
 
 #[rustfmt::skip]                // Keep public re-exports separate.
 pub use secp256k1::{constants, Keypair, Parity, Secp256k1, Verification};
@@ -171,27 +169,6 @@ impl PublicKey {
     /// Returns bitcoin 160-bit hash of the public key.
     pub fn pubkey_hash(&self) -> PubkeyHash {
         PubkeyHash(self.with_serialized(hash160::Hash::hash))
-    }
-
-    /// Returns bitcoin 160-bit hash of the public key for witness program
-    pub fn wpubkey_hash(&self) -> Result<WPubkeyHash, UncompressedPublicKeyError> {
-        if self.compressed {
-            Ok(WPubkeyHash::from_byte_array(
-                hash160::Hash::hash(&self.inner.serialize()).to_byte_array(),
-            ))
-        } else {
-            Err(UncompressedPublicKeyError)
-        }
-    }
-
-    /// Returns the script code used to spend a P2WPKH input.
-    ///
-    /// While the type returned is [`WitnessScriptBuf`], this is **not** a witness script and
-    /// should not be used as one. It is a special template defined in BIP 143 which is used
-    /// in place of a witness script for purposes of sighash computation.
-    pub fn p2wpkh_script_code(&self) -> Result<WitnessScriptBuf, UncompressedPublicKeyError> {
-        let key = CompressedPublicKey::try_from(*self)?;
-        Ok(key.p2wpkh_script_code())
     }
 
     /// Writes the public key into a writer.
@@ -376,15 +353,13 @@ impl FromStr for PublicKey {
 hashes::hash_newtype! {
     /// A hash of a public key.
     pub struct PubkeyHash(hash160::Hash);
-    /// SegWit version of a public key hash.
-    pub struct WPubkeyHash(hash160::Hash);
 }
 
-hashes::impl_hex_for_newtype!(PubkeyHash, WPubkeyHash);
+hashes::impl_hex_for_newtype!(PubkeyHash);
 #[cfg(feature = "serde")]
-hashes::impl_serde_for_newtype!(PubkeyHash, WPubkeyHash);
+hashes::impl_serde_for_newtype!(PubkeyHash);
 
-impl_asref_push_bytes!(PubkeyHash, WPubkeyHash);
+impl_asref_push_bytes!(PubkeyHash);
 
 impl From<PublicKey> for PubkeyHash {
     fn from(key: PublicKey) -> PubkeyHash { key.pubkey_hash() }
@@ -401,20 +376,6 @@ pub struct CompressedPublicKey(pub secp256k1::PublicKey);
 impl CompressedPublicKey {
     /// Returns bitcoin 160-bit hash of the public key.
     pub fn pubkey_hash(&self) -> PubkeyHash { PubkeyHash(hash160::Hash::hash(&self.to_bytes())) }
-
-    /// Returns bitcoin 160-bit hash of the public key for witness program.
-    pub fn wpubkey_hash(&self) -> WPubkeyHash {
-        WPubkeyHash::from_byte_array(hash160::Hash::hash(&self.to_bytes()).to_byte_array())
-    }
-
-    /// Returns the script code used to spend a P2WPKH input.
-    ///
-    /// While the type returned is [`WitnessScriptBuf`], this is **not** a witness script and
-    /// should not be used as one. It is a special template defined in BIP 143 which is used
-    /// in place of a witness script for purposes of sighash computation.
-    pub fn p2wpkh_script_code(&self) -> WitnessScriptBuf {
-        script::p2wpkh_script_code(self.wpubkey_hash())
-    }
 
     /// Writes the public key into a writer.
     pub fn write_into<W: io::Write + ?Sized>(&self, writer: &mut W) -> Result<(), io::Error> {
@@ -518,14 +479,6 @@ impl From<CompressedPublicKey> for PubkeyHash {
 
 impl From<&CompressedPublicKey> for PubkeyHash {
     fn from(key: &CompressedPublicKey) -> Self { key.pubkey_hash() }
-}
-
-impl From<CompressedPublicKey> for WPubkeyHash {
-    fn from(key: CompressedPublicKey) -> Self { key.wpubkey_hash() }
-}
-
-impl From<&CompressedPublicKey> for WPubkeyHash {
-    fn from(key: &CompressedPublicKey) -> Self { key.wpubkey_hash() }
 }
 
 /// A Bitcoin ECDSA private key.
@@ -849,224 +802,6 @@ impl<'de> serde::Deserialize<'de> for CompressedPublicKey {
             d.deserialize_bytes(BytesVisitor)
         }
     }
-}
-/// Untweaked BIP-0340 X-coord-only public key.
-pub type UntweakedPublicKey = XOnlyPublicKey;
-
-/// Tweaked BIP-0340 X-coord-only public key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[cfg_attr(feature = "serde", serde(transparent))]
-pub struct TweakedPublicKey(XOnlyPublicKey);
-
-impl fmt::LowerHex for TweakedPublicKey {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { fmt::LowerHex::fmt(&self.0, f) }
-}
-// Allocate for serialized size
-impl_to_hex_from_lower_hex!(TweakedPublicKey, |_| constants::SCHNORR_PUBLIC_KEY_SIZE * 2);
-
-impl fmt::Display for TweakedPublicKey {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { fmt::Display::fmt(&self.0, f) }
-}
-
-/// Untweaked BIP-0340 key pair.
-pub type UntweakedKeypair = Keypair;
-
-/// Tweaked BIP-0340 key pair.
-///
-/// # Examples
-///
-/// ```
-/// # #[cfg(feature = "rand-std")] {
-/// # use bitcoin::key::{Keypair, TweakedKeypair, TweakedPublicKey};
-/// # use bitcoin::secp256k1::{rand, Secp256k1};
-/// # let secp = Secp256k1::new();
-/// # let keypair = TweakedKeypair::dangerous_assume_tweaked(Keypair::new(&secp, &mut rand::thread_rng()));
-/// // There are various conversion methods available to get a tweaked pubkey from a tweaked keypair.
-/// let (_pk, _parity) = keypair.public_parts();
-/// let _pk  = TweakedPublicKey::from_keypair(keypair);
-/// let _pk = TweakedPublicKey::from(keypair);
-/// # }
-/// ```
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[cfg_attr(feature = "serde", serde(transparent))]
-pub struct TweakedKeypair(Keypair);
-
-/// A trait for tweaking BIP-0340 key types (x-only public keys and key pairs).
-pub trait TapTweak {
-    /// Tweaked key type with optional auxiliary information.
-    type TweakedAux;
-    /// Tweaked key type.
-    type TweakedKey;
-
-    /// Tweaks an untweaked key with corresponding public key value and optional script tree Merkle
-    /// root. For the [`Keypair`] type this also tweaks the private key in the pair.
-    ///
-    /// This is done by using the equation Q = P + H(P|c)G, where
-    ///  * Q is the tweaked public key
-    ///  * P is the internal public key
-    ///  * H is the hash function
-    ///  * c is the commitment data
-    ///  * G is the generator point
-    ///
-    /// # Returns
-    ///
-    /// The tweaked key and its parity.
-    fn tap_tweak<C: Verification>(
-        self,
-        secp: &Secp256k1<C>,
-        merkle_root: Option<TapNodeHash>,
-    ) -> Self::TweakedAux;
-
-    /// Directly converts an [`UntweakedPublicKey`] to a [`TweakedPublicKey`].
-    ///
-    /// This method is dangerous and can lead to loss of funds if used incorrectly.
-    /// Specifically, in multi-party protocols a peer can provide a value that allows them to steal.
-    fn dangerous_assume_tweaked(self) -> Self::TweakedKey;
-}
-
-impl TapTweak for UntweakedPublicKey {
-    type TweakedAux = (TweakedPublicKey, Parity);
-    type TweakedKey = TweakedPublicKey;
-
-    /// Tweaks an untweaked public key with corresponding public key value and optional script tree
-    /// Merkle root.
-    ///
-    /// This is done by using the equation Q = P + H(P|c)G, where
-    ///  * Q is the tweaked public key
-    ///  * P is the internal public key
-    ///  * H is the hash function
-    ///  * c is the commitment data
-    ///  * G is the generator point
-    ///
-    /// # Returns
-    ///
-    /// The tweaked key and its parity.
-    fn tap_tweak<C: Verification>(
-        self,
-        secp: &Secp256k1<C>,
-        merkle_root: Option<TapNodeHash>,
-    ) -> (TweakedPublicKey, Parity) {
-        let tweak = TapTweakHash::from_key_and_merkle_root(self, merkle_root).to_scalar();
-        let (output_key, parity) = self.add_tweak(secp, &tweak).expect("Tap tweak failed");
-
-        debug_assert!(self.tweak_add_check(secp, &output_key, parity, tweak));
-        (TweakedPublicKey(output_key), parity)
-    }
-
-    fn dangerous_assume_tweaked(self) -> TweakedPublicKey { TweakedPublicKey(self) }
-}
-
-impl TapTweak for UntweakedKeypair {
-    type TweakedAux = TweakedKeypair;
-    type TweakedKey = TweakedKeypair;
-
-    /// Applies a Taproot tweak to both keys within the keypair.
-    ///
-    /// If `merkle_root` is provided, produces a Taproot key that can be spent by any
-    /// of the script paths committed to by the root. If it is not provided, produces
-    /// a Taproot key which can [provably only be spent via
-    /// keyspend](https://github.com/bitcoin/bips/blob/master/bip-0341.mediawiki#cite_note-23).
-    ///
-    /// # Returns
-    ///
-    /// The tweaked keypair.
-    fn tap_tweak<C: Verification>(
-        self,
-        secp: &Secp256k1<C>,
-        merkle_root: Option<TapNodeHash>,
-    ) -> TweakedKeypair {
-        let (pubkey, _parity) = XOnlyPublicKey::from_keypair(&self);
-        let tweak = TapTweakHash::from_key_and_merkle_root(pubkey, merkle_root).to_scalar();
-        let tweaked = self.add_xonly_tweak(secp, &tweak).expect("Tap tweak failed");
-        TweakedKeypair(tweaked)
-    }
-
-    fn dangerous_assume_tweaked(self) -> TweakedKeypair { TweakedKeypair(self) }
-}
-
-impl TweakedPublicKey {
-    /// Returns the [`TweakedPublicKey`] for `keypair`.
-    #[inline]
-    pub fn from_keypair(keypair: TweakedKeypair) -> Self {
-        let (xonly, _parity) = keypair.0.x_only_public_key();
-        TweakedPublicKey(xonly.into())
-    }
-
-    /// Constructs a new [`TweakedPublicKey`] from a [`XOnlyPublicKey`]. No tweak is applied, consider
-    /// calling `tap_tweak` on an [`UntweakedPublicKey`] instead of using this constructor.
-    ///
-    /// This method is dangerous and can lead to loss of funds if used incorrectly.
-    /// Specifically, in multi-party protocols a peer can provide a value that allows them to steal.
-    #[inline]
-    pub fn dangerous_assume_tweaked(key: XOnlyPublicKey) -> TweakedPublicKey {
-        TweakedPublicKey(key)
-    }
-
-    /// Returns the underlying public key.
-    #[inline]
-    #[doc(hidden)]
-    #[deprecated(since = "0.32.6", note = "use to_x_only_public_key() instead")]
-    pub fn to_inner(self) -> XOnlyPublicKey { self.0 }
-
-    /// Returns the underlying x-only public key.
-    #[inline]
-    pub fn to_x_only_public_key(self) -> XOnlyPublicKey { self.0 }
-
-    /// Returns a reference to the underlying x-only public key.
-    #[inline]
-    pub fn as_x_only_public_key(&self) -> &XOnlyPublicKey { &self.0 }
-
-    /// Serializes the key as a byte-encoded x coordinate value (32 bytes).
-    #[inline]
-    pub fn serialize(&self) -> [u8; constants::SCHNORR_PUBLIC_KEY_SIZE] { self.0.serialize() }
-}
-
-impl TweakedKeypair {
-    /// Constructs a new [`TweakedKeypair`] from a [`Keypair`]. No tweak is applied, consider
-    /// calling `tap_tweak` on an [`UntweakedKeypair`] instead of using this constructor.
-    ///
-    /// This method is dangerous and can lead to loss of funds if used incorrectly.
-    /// Specifically, in multi-party protocols a peer can provide a value that allows them to steal.
-    #[inline]
-    pub fn dangerous_assume_tweaked(pair: Keypair) -> TweakedKeypair { TweakedKeypair(pair) }
-
-    /// Returns the underlying key pair.
-    #[inline]
-    #[doc(hidden)]
-    #[deprecated(since = "0.32.6", note = "use to_keypair() instead")]
-    pub fn to_inner(self) -> Keypair { self.0 }
-
-    /// Returns the underlying key pair.
-    #[inline]
-    pub fn to_keypair(self) -> Keypair { self.0 }
-
-    /// Returns a reference to the underlying key pair.
-    #[inline]
-    pub fn as_keypair(&self) -> &Keypair { &self.0 }
-
-    /// Returns the [`TweakedPublicKey`] and its [`Parity`] for this [`TweakedKeypair`].
-    #[inline]
-    pub fn public_parts(&self) -> (TweakedPublicKey, Parity) {
-        let (xonly, parity) = self.0.x_only_public_key();
-        (TweakedPublicKey(xonly.into()), parity)
-    }
-}
-
-impl From<TweakedPublicKey> for XOnlyPublicKey {
-    #[inline]
-    fn from(pair: TweakedPublicKey) -> Self { pair.0 }
-}
-
-impl From<TweakedKeypair> for Keypair {
-    #[inline]
-    fn from(pair: TweakedKeypair) -> Self { pair.0 }
-}
-
-impl From<TweakedKeypair> for TweakedPublicKey {
-    #[inline]
-    fn from(pair: TweakedKeypair) -> Self { TweakedPublicKey::from_keypair(pair) }
 }
 
 /// Error returned while generating key from slice.

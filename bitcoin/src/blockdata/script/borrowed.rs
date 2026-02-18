@@ -5,23 +5,18 @@ use core::fmt;
 use hex::DisplayHex as _;
 use internals::array::ArrayExt; // For `split_first`.
 use internals::ToU64 as _;
-use secp256k1::{Secp256k1, Verification};
-
-use super::witness_version::WitnessVersion;
 use super::{
     Builder, Instruction, InstructionIndices, Instructions, PushBytes, RedeemScript,
     RedeemScriptSizeError, Script, ScriptHash, ScriptHashableTag, ScriptPubKey, ScriptSig,
-    TapScript, WScriptHash, WitnessScript, WitnessScriptSizeError,
 };
 use crate::consensus::{self, Encodable};
-use crate::key::{PublicKey, UntweakedPublicKey, WPubkeyHash};
+use crate::key::PublicKey;
 use crate::opcodes::all::*;
 use crate::opcodes::{self, Opcode};
 use crate::policy::{DUST_RELAY_TX_FEE, MAX_OP_RETURN_RELAY};
 use crate::prelude::{sink, String, ToString};
-use crate::script::{self, ScriptPubKeyBufExt as _};
-use crate::taproot::{LeafVersion, TapLeafHash, TapNodeHash};
-use crate::{internal_macros, Amount, FeeRate, ScriptPubKeyBuf, WitnessScriptBuf};
+use crate::blockdata::script::owned::ScriptPubKeyBufExt as _;
+use crate::{internal_macros, Amount, FeeRate, ScriptPubKeyBuf};
 
 internal_macros::define_extension_trait! {
     /// Extension functionality for the [`Script`] type.
@@ -175,120 +170,6 @@ internal_macros::define_extension_trait! {
             self.script_hash().map(ScriptPubKeyBuf::new_p2sh)
         }
 
-        /// Returns the script code used for spending a P2WPKH output if this script is a script pubkey
-        /// for a P2WPKH output. The `scriptCode` is described in [BIP-0143].
-        ///
-        /// While the type returned is [`WitnessScriptBuf`], this is **not** a witness script and
-        /// should not be used as one. It is a special template defined in BIP 143 which is used
-        /// in place of a witness script for purposes of sighash computation.
-        ///
-        /// [BIP-0143]: <https://github.com/bitcoin/bips/blob/99701f68a88ce33b2d0838eb84e115cef505b4c2/bip-0143.mediawiki>
-        fn p2wpkh_script_code(&self) -> Option<WitnessScriptBuf>
-        where T: ScriptHashableTag
-        {
-            if self.is_p2wpkh() {
-                // The `self` script is 0x00, 0x14, <pubkey_hash>
-                let bytes = <[u8; 20]>::try_from(&self.as_bytes()[2..]).expect("length checked in is_p2wpkh()");
-                let wpkh = WPubkeyHash::from_byte_array(bytes);
-                Some(script::p2wpkh_script_code(wpkh))
-            } else {
-                None
-            }
-        }
-
-        /// Returns witness version of the script, if any, assuming the script is a `scriptPubkey`.
-        ///
-        /// # Returns
-        ///
-        /// The witness version if this script is found to conform to the SegWit rules:
-        ///
-        /// > A scriptPubKey (or redeemScript as defined in BIP-0016/P2SH) that consists of a 1-byte
-        /// > push opcode (for 0 to 16) followed by a data push between 2 and 40 bytes gets a new
-        /// > special meaning. The value of the first push is called the "version byte". The following
-        /// > byte vector pushed is called the "witness program".
-        #[inline]
-        fn witness_version(&self) -> Option<WitnessVersion>
-        where T: ScriptHashableTag
-        {
-            let script_len = self.len();
-            if !(4..=42).contains(&script_len) {
-                return None;
-            }
-
-            let ver_opcode = Opcode::from(self.as_bytes()[0]); // Version 0 or PUSHNUM_1-PUSHNUM_16
-            let push_opbyte = self.as_bytes()[1]; // Second byte push opcode 2-40 bytes
-
-            if push_opbyte < OP_PUSHBYTES_2.to_u8() || push_opbyte > OP_PUSHBYTES_40.to_u8() {
-                return None;
-            }
-            // Check that the rest of the script has the correct size
-            if script_len - 2 != push_opbyte as usize {
-                return None;
-            }
-
-            WitnessVersion::try_from(ver_opcode).ok()
-        }
-
-        /// Checks whether a script pubkey is a P2WSH output.
-        #[inline]
-        fn is_p2wsh(&self) -> bool
-        where T: ScriptHashableTag
-        {
-            self.len() == 34
-                && self.witness_version() == Some(WitnessVersion::V0)
-                && self.as_bytes()[1] == OP_PUSHBYTES_32.to_u8()
-        }
-
-        /// Checks whether a script pubkey is a P2WPKH output.
-        #[inline]
-        fn is_p2wpkh(&self) -> bool
-        where T: ScriptHashableTag
-        {
-            self.len() == 22
-                && self.witness_version() == Some(WitnessVersion::V0)
-                && self.as_bytes()[1] == OP_PUSHBYTES_20.to_u8()
-        }
-    }
-}
-
-internal_macros::define_extension_trait! {
-    /// Extension functionality for the [`WitnessScript`] type.
-    pub trait WitnessScriptExt impl for WitnessScript {
-        /// Returns 256-bit hash of the script for P2WSH outputs.
-        #[inline]
-        fn wscript_hash(&self) -> Result<WScriptHash, WitnessScriptSizeError> {
-            WScriptHash::from_script(self)
-        }
-
-        /// Computes the P2WSH output corresponding to this witnessScript (aka the "witness redeem
-        /// script").
-        fn to_p2wsh(&self) -> Result<ScriptPubKeyBuf, WitnessScriptSizeError> {
-            self.wscript_hash().map(ScriptPubKeyBuf::new_p2wsh)
-        }
-    }
-}
-
-crate::internal_macros::define_extension_trait! {
-    /// Extension functionality for the [`TapScript`] type.
-    pub trait TapScriptExt impl for TapScript {
-        /// Computes leaf hash of tapscript.
-        #[inline]
-        fn tapscript_leaf_hash(&self) -> TapLeafHash {
-            TapLeafHash::from_script(self, LeafVersion::TapScript)
-        }
-
-        /// Computes P2TR output with a given internal key and a single script spending path equal to
-        /// the current script, assuming that the script is a Tapscript.
-        fn to_p2tr<C: Verification, K: Into<UntweakedPublicKey>>(
-            &self,
-            secp: &Secp256k1<C>,
-            internal_key: K,
-        ) -> ScriptPubKeyBuf {
-            let internal_key = internal_key.into();
-            let leaf_hash = self.tapscript_leaf_hash();
-            let merkle_root = TapNodeHash::from(leaf_hash);
-            ScriptPubKeyBuf::new_p2tr(secp, internal_key, Some(merkle_root))
-        }
     }
 }
 
@@ -381,18 +262,6 @@ internal_macros::define_extension_trait! {
             }
 
             instructions.next().is_none()
-        }
-
-        /// Checks whether a script pubkey is a Segregated Witness (SegWit) program.
-        #[inline]
-        fn is_witness_program(&self) -> bool { self.witness_version().is_some() }
-
-        /// Checks whether a script pubkey is a P2TR output.
-        #[inline]
-        fn is_p2tr(&self) -> bool {
-            self.len() == 34
-                && self.witness_version() == Some(WitnessVersion::V1)
-                && self.as_bytes()[1] == OP_PUSHBYTES_32.to_u8()
         }
 
         /// Check if this is a consensus-valid OP_RETURN output.
@@ -565,10 +434,6 @@ internal_macros::define_extension_trait! {
             let sats = dust_relay_fee_rate_per_kvb
                 .checked_mul(if self.is_op_return() {
                     0
-                } else if self.is_witness_program() {
-                    32 + 4 + 1 + (107 / 4) + 4 + // The spend cost copied from Core
-                    8 + // The serialized size of the TxOut's amount field
-                    self.consensus_encode(&mut sink()).expect("sinks don't error").to_u64() // The serialized size of this script_pubkey
                 } else {
                     32 + 4 + 1 + 107 + 4 + // The spend cost copied from Core
                     8 + // The serialized size of the TxOut's amount field

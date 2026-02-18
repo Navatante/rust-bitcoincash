@@ -52,18 +52,14 @@ mod owned;
 mod push_bytes;
 #[cfg(test)]
 mod tests;
-pub mod witness_program;
-pub mod witness_version;
 
 use core::convert::Infallible;
 use core::fmt;
 
 use io::{BufRead, Write};
 
-use self::witness_version::WitnessVersion;
 use crate::consensus::{encode, Decodable, Encodable};
 use crate::internal_macros::impl_asref_push_bytes;
-use crate::key::WPubkeyHash;
 use crate::opcodes::all::*;
 use crate::opcodes::Opcode;
 use crate::prelude::Vec;
@@ -72,7 +68,7 @@ use crate::OutPoint;
 #[rustfmt::skip]                // Keep public re-exports separate.
 #[doc(inline)]
 pub use self::{
-    borrowed::{ScriptExt, TapScriptExt, ScriptPubKeyExt, WitnessScriptExt, ScriptSigExt},
+    borrowed::{ScriptExt, ScriptPubKeyExt, ScriptSigExt},
     builder::Builder,
     instruction::{Instruction, Instructions, InstructionIndices},
     owned::{ScriptBufExt, ScriptPubKeyBufExt},
@@ -82,33 +78,14 @@ pub use self::{
 pub use primitives::script::{
     RedeemScript, RedeemScriptBuf, RedeemScriptSizeError, RedeemScriptTag, Script, ScriptBuf,
     ScriptHash, ScriptHashableTag, ScriptPubKey, ScriptPubKeyBuf, ScriptPubKeyTag, ScriptSig,
-    ScriptSigBuf, ScriptSigTag, Tag, TapScript, TapScriptBuf, WScriptHash, WitnessScript,
+    ScriptSigBuf, ScriptSigTag, Tag, TapScript, TapScriptBuf, WitnessScript,
     WitnessScriptBuf, WitnessScriptSizeError, WitnessScriptTag,
 };
 
 pub(crate) use self::borrowed::ScriptExtPriv;
 pub(crate) use self::owned::ScriptBufExtPriv;
 
-impl_asref_push_bytes!(ScriptHash, WScriptHash);
-
-/// Constructs a new [`WitnessScriptBuf`] containing the script code used for spending a P2WPKH output.
-///
-/// The `scriptCode` is described in [BIP-0143].
-///
-/// While the type returned is [`WitnessScriptBuf`], this is **not** a witness script and
-/// should not be used as one. It is a special template defined in BIP-0143 which is used
-/// in place of a witness script for purposes of sighash computation.
-///
-/// [BIP-0143]: <https://github.com/bitcoin/bips/blob/99701f68a88ce33b2d0838eb84e115cef505b4c2/bip-0143.mediawiki>
-pub fn p2wpkh_script_code(wpkh: WPubkeyHash) -> WitnessScriptBuf {
-    Builder::new()
-        .push_opcode(OP_DUP)
-        .push_opcode(OP_HASH160)
-        .push_slice(wpkh)
-        .push_opcode(OP_EQUALVERIFY)
-        .push_opcode(OP_CHECKSIG)
-        .into_script()
-}
+impl_asref_push_bytes!(ScriptHash);
 
 /// Encodes an integer in script(minimal CScriptNum) format.
 ///
@@ -196,21 +173,6 @@ fn opcode_to_verify(opcode: Option<Opcode>) -> Option<Opcode> {
         OP_CHECKMULTISIG => Some(OP_CHECKMULTISIGVERIFY),
         _ => None,
     })
-}
-
-/// Generates P2WSH-type of scriptPubkey with a given [`WitnessVersion`] and the program bytes.
-/// Does not do any checks on version or program length.
-///
-/// Convenience method used by `new_p2a`, `new_p2wpkh`, `new_p2wsh`, `new_p2tr`, and `new_p2tr_tweaked`.
-pub(crate) fn new_witness_program_unchecked<T: AsRef<PushBytes>, Tg>(
-    version: WitnessVersion,
-    program: T,
-) -> ScriptBuf<Tg> {
-    let program = program.as_ref();
-    debug_assert!(program.len() >= 2 && program.len() <= 40);
-    // In SegWit v0, the program must be either 20 bytes (P2WPKH) or 32 bytes (P2WSH) long.
-    debug_assert!(version != WitnessVersion::V0 || program.len() == 20 || program.len() == 32);
-    Builder::new().push_opcode(version.into()).push_slice(program).into_script()
 }
 
 impl<T> Encodable for Script<T> {

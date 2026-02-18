@@ -20,27 +20,23 @@ use hashes::{sha256d, HashEngine as _};
 
 use crate::prelude::Vec;
 use crate::transaction::TxIdentifier;
-use crate::{internal_macros, Txid, Wtxid};
+use crate::{internal_macros, Txid};
 
 #[rustfmt::skip]
 #[doc(inline)]
 pub use self::block::{MerkleBlock, MerkleBlockError, PartialMerkleTree};
-pub use primitives::merkle_tree::{TxMerkleNode, WitnessMerkleNode};
+pub use primitives::merkle_tree::TxMerkleNode;
 
 internal_macros::impl_hashencode!(TxMerkleNode);
-internal_macros::impl_hashencode!(WitnessMerkleNode);
 
-/// A node in a Merkle tree of transactions or witness data within a block.
+/// A node in a Merkle tree of transactions within a block.
 ///
 /// This trait is used to compute the transaction Merkle root contained in
 /// a block header. This is a particularly weird algorithm -- it interprets
 /// the list of transactions as a balanced binary tree, duplicating branches
 /// as needed to fill out the tree to a power of two size.
-///
-/// Other Merkle trees in Bitcoin, such as those used in Taproot commitments,
-/// do not use this algorithm and cannot use this trait.
 pub trait MerkleNode: Copy {
-    /// The hash (TXID or WTXID) of a transaction in the tree.
+    /// The TXID hash of a transaction in the tree.
     type Leaf: TxIdentifier;
 
     /// Convert a hash to a leaf node of the tree.
@@ -86,23 +82,8 @@ pub trait MerkleNode: Copy {
     }
 }
 
-// These two impl blocks are identical. FIXME once we have nailed down
-// our hash traits, it should be possible to put bounds on `MerkleNode`
-// and `MerkleNode::Leaf` which are sufficient to turn both methods into
-// provided methods in the trait definition.
 impl MerkleNode for TxMerkleNode {
     type Leaf = Txid;
-    fn from_leaf(leaf: Self::Leaf) -> Self { Self::from_byte_array(leaf.to_byte_array()) }
-
-    fn combine(&self, other: &Self) -> Self {
-        let mut encoder = sha256d::Hash::engine();
-        encoder.input(self.as_byte_array());
-        encoder.input(other.as_byte_array());
-        Self::from_byte_array(sha256d::Hash::from_engine(encoder).to_byte_array())
-    }
-}
-impl MerkleNode for WitnessMerkleNode {
-    type Leaf = Wtxid;
     fn from_leaf(leaf: Self::Leaf) -> Self { Self::from_byte_array(leaf.to_byte_array()) }
 
     fn combine(&self, other: &Self) -> Self {

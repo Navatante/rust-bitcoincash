@@ -10,7 +10,6 @@ pub mod constants;
 pub mod opcodes;
 pub mod script;
 pub mod transaction;
-pub mod witness;
 
 #[rustfmt::skip]                // Keep public re-exports separate.
 #[doc(inline)]

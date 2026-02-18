@@ -7,14 +7,14 @@
 #[deprecated(since = "TBD", note = "use `crate::T` instead")]
 pub use crate::bip158::{FilterHash, FilterHeader};
 #[deprecated(since = "TBD", note = "use `crate::T` instead")]
-pub use crate::{BlockHash, TxMerkleNode, Txid, WitnessCommitment, WitnessMerkleNode, Wtxid};
+pub use crate::{BlockHash, TxMerkleNode, Txid};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::key::{PubkeyHash, WPubkeyHash};
-    use crate::script::{ScriptHash, WScriptHash};
-    use crate::{LegacySighash, SegwitV0Sighash, TapSighash, XKeyIdentifier};
+    use crate::key::PubkeyHash;
+    use crate::script::ScriptHash;
+    use crate::{LegacySighash, XKeyIdentifier};
 
     #[rustfmt::skip]
     /// sha256d of the empty string
@@ -39,23 +39,11 @@ mod tests {
         );
 
         assert_eq!(
-            Wtxid::from_byte_array(DUMMY32).to_string(),
-            "56944c5d3f98413ef45cf54545538103cc9f298e0575820ad3591376e2e0f65d",
-        );
-        assert_eq!(
             BlockHash::from_byte_array(DUMMY32).to_string(),
             "56944c5d3f98413ef45cf54545538103cc9f298e0575820ad3591376e2e0f65d",
         );
         assert_eq!(
             LegacySighash::from_byte_array(DUMMY32).to_string(),
-            "5df6e0e2761359d30a8275058e299fcc0381534545f55cf43e41983f5d4c9456",
-        );
-        assert_eq!(
-            SegwitV0Sighash::from_byte_array(DUMMY32).to_string(),
-            "5df6e0e2761359d30a8275058e299fcc0381534545f55cf43e41983f5d4c9456",
-        );
-        assert_eq!(
-            TapSighash::from_byte_array(DUMMY32).to_string(),
             "5df6e0e2761359d30a8275058e299fcc0381534545f55cf43e41983f5d4c9456",
         );
 
@@ -67,25 +55,9 @@ mod tests {
             ScriptHash::from_byte_array(DUMMY20).to_string(),
             "b472a266d0bd89c13706a4132ccfb16f7c3b9fcb",
         );
-        assert_eq!(
-            WPubkeyHash::from_byte_array(DUMMY20).to_string(),
-            "b472a266d0bd89c13706a4132ccfb16f7c3b9fcb",
-        );
-        assert_eq!(
-            WScriptHash::from_byte_array(DUMMY32).to_string(),
-            "5df6e0e2761359d30a8275058e299fcc0381534545f55cf43e41983f5d4c9456",
-        );
 
         assert_eq!(
             TxMerkleNode::from_byte_array(DUMMY32).to_string(),
-            "56944c5d3f98413ef45cf54545538103cc9f298e0575820ad3591376e2e0f65d",
-        );
-        assert_eq!(
-            WitnessMerkleNode::from_byte_array(DUMMY32).to_string(),
-            "56944c5d3f98413ef45cf54545538103cc9f298e0575820ad3591376e2e0f65d",
-        );
-        assert_eq!(
-            WitnessCommitment::from_byte_array(DUMMY32).to_string(),
             "56944c5d3f98413ef45cf54545538103cc9f298e0575820ad3591376e2e0f65d",
         );
         assert_eq!(
